@@ -8,13 +8,10 @@ from src.preprocessing.histogram import (
     calculate_statistics,
     calculate_entropy,
 )
-
 # ============================================================
 # PATHS (Made Relative for Team Portability & Cloud Deployment)
 # ============================================================
-
 PROJECT_ROOT = Path(__file__).resolve().parent
-
 MODEL_PATH = (
     PROJECT_ROOT
     / "runs"
@@ -25,30 +22,21 @@ MODEL_PATH = (
     / "weights"
     / "best.pt"
 )
-
-
 # ============================================================
 # PAGE CONFIGURATION
 # ============================================================
-
 st.set_page_config(
     page_title="EchoTrace",
     page_icon="🌊",
     layout="wide"
 )
-
-
 # ============================================================
 # LOAD MODEL
 # ============================================================
-
 @st.cache_resource
 def load_model():
     return YOLO(str(MODEL_PATH))
-
-
 model = load_model()
-
 def extract_roi(image, bbox):
     """
     Extract a YOLO detection bounding box from an image.
@@ -112,7 +100,39 @@ def calculate_fusion_score(confidence, entropy):
     )
 
     return fusion_score
+def generate_demo_coordinates(
+    count,
+    base_lat=13.0800,
+    base_lon=80.2700
+):
+    """
+    Generate simulated coordinates for prototype demonstration.
 
+    These coordinates are NOT real sonar/GPS measurements.
+    """
+
+    coordinates = []
+
+    offsets = [
+        (0.0000, 0.0000),
+        (0.0020, 0.0030),
+        (-0.0015, 0.0025),
+        (0.0030, -0.0020),
+        (-0.0020, -0.0030),
+    ]
+
+    for i in range(count):
+
+        lat_offset, lon_offset = offsets[
+            i % len(offsets)
+        ]
+
+        coordinates.append({
+            "latitude": base_lat + lat_offset,
+            "longitude": base_lon + lon_offset
+        })
+
+    return coordinates
 # ============================================================
 # HEADER
 # ============================================================
@@ -206,6 +226,62 @@ if result.boxes is not None:
             "bbox": (x1, y1, x2, y2)
         })
 
+# ============================================================
+# ECHOTRACE DETECTION HISTORY
+# ============================================================
+
+detection_records = []
+
+for detection in detections:
+
+    roi = extract_roi(
+        image,
+        detection["bbox"]
+    )
+
+    if roi is None or roi.size == 0:
+        continue
+
+    roi_gray = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    roi_features = calculate_statistics(
+        roi_gray
+    )
+
+    roi_features["entropy"] = calculate_entropy(
+        roi_gray
+    )
+
+    fusion_score = calculate_fusion_score(
+        detection["confidence"],
+        roi_features["entropy"]
+    )
+
+    detection_records.append({
+        "class": detection["class_name"],
+        "confidence": detection["confidence"],
+        "bbox": detection["bbox"],
+        "roi_mean": roi_features["mean"],
+        "roi_std": roi_features["std"],
+        "roi_p10": roi_features["p10"],
+        "roi_p90": roi_features["p90"],
+        "roi_entropy": roi_features["entropy"],
+        "fusion_score": fusion_score
+    })
+
+demo_coordinates = generate_demo_coordinates(
+    len(detection_records)
+)
+
+for record, coordinate in zip(
+    detection_records,
+    demo_coordinates
+):
+    record["latitude"] = coordinate["latitude"]
+    record["longitude"] = coordinate["longitude"]
 
 # ============================================================
 # DETECTION SUMMARY
@@ -264,57 +340,43 @@ st.image(
     use_container_width=True
 )
 
+st.divider()
 
-# ============================================================
-# ECHOTRACE DETECTION HISTORY
-# ============================================================
+st.subheader("🗺️ Detection Locations")
 
-detection_records = []
+st.warning(
+    "DEMO MODE — coordinates are simulated. "
+    "Real GPS integration is planned."
+)
 
-for detection in detections:
+if detection_records:
 
-    roi = extract_roi(
-        image,
-        detection["bbox"]
+    map_data = {
+        "lat": [
+            record["latitude"]
+            for record in detection_records
+        ],
+        "lon": [
+            record["longitude"]
+            for record in detection_records
+        ]
+    }
+
+    st.map(map_data)
+
+else:
+
+    st.info(
+        "No detection locations available."
     )
-
-    if roi is None or roi.size == 0:
-        continue
-
-    roi_gray = cv2.cvtColor(
-        roi,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    roi_features = calculate_statistics(
-        roi_gray
-    )
-
-    roi_features["entropy"] = calculate_entropy(
-        roi_gray
-    )
-
-    fusion_score = calculate_fusion_score(
-        detection["confidence"],
-        roi_features["entropy"]
-    )
-
-    detection_records.append({
-        "class": detection["class_name"],
-        "confidence": detection["confidence"],
-        "bbox": detection["bbox"],
-        "roi_mean": roi_features["mean"],
-        "roi_std": roi_features["std"],
-        "roi_p10": roi_features["p10"],
-        "roi_p90": roi_features["p90"],
-        "roi_entropy": roi_features["entropy"],
-        "fusion_score": fusion_score
-    })
-
 # FIXED: Moved out of the loop context to prevent layout stacking bugs
 total_detections = len(detection_records)
 st.metric("Total Validated Detections", total_detections)
 st.divider()
+
+# ============================================================
+# DETECTION HISTORY TABLE (FIXED: Now uses the original detection_records)
+# ============================================================
 
 st.subheader("📋 Detection History")
 
@@ -325,12 +387,24 @@ if detection_records:
     for i, record in enumerate(detection_records, start=1):
 
         history_data.append({
-            "Detection": i,
-            "Class": record["class"],
-            "YOLO Confidence": f"{record['confidence'] * 100:.2f}%",
-            "ROI Entropy": f"{record['roi_entropy']:.2f}",
-            "Fusion Score": f"{record['fusion_score'] * 100:.1f}%"
-        })
+    "Detection": i,
+    "Class": record["class"],
+    "YOLO Confidence": (
+        f"{record['confidence'] * 100:.2f}%"
+    ),
+    "ROI Entropy": (
+        f"{record['roi_entropy']:.2f}"
+    ),
+    "Fusion Score": (
+        f"{record['fusion_score'] * 100:.1f}%"
+    ),
+    "Latitude": (
+        f"{record['latitude']:.5f}"
+    ),
+    "Longitude": (
+        f"{record['longitude']:.5f}"
+    )
+})
 
     st.dataframe(
         history_data,
